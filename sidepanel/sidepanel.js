@@ -5834,8 +5834,21 @@ function normalizeHeroSmsCountryPayloadEntries(source) {
   if (!source || typeof source !== 'object') {
     return [];
   }
-  return Object.values(source)
-    .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry));
+  return Object.entries(source)
+    .map(([key, entry]) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        return null;
+      }
+      if (Number(entry.id ?? entry.countryId ?? entry.country_id) > 0) {
+        return entry;
+      }
+      const keyedId = Math.floor(Number(key));
+      if (Number.isFinite(keyedId) && keyedId > 0) {
+        return { ...entry, id: keyedId };
+      }
+      return entry;
+    })
+    .filter(Boolean);
 }
 
 function parseHeroSmsCountryPayload(payload) {

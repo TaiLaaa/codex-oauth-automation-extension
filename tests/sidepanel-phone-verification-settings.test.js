@@ -172,9 +172,13 @@ return { parseHeroSmsCountryPayload };
 `)();
 
   const keyedPayload = {
-    52: { id: 52, eng: 'Thailand', chn: '泰国' },
-    6: { id: 6, eng: 'Indonesia', chn: '印度尼西亚' },
+    52: { eng: 'Thailand', chn: '泰国' },
+    6: { eng: 'Indonesia', chn: '印度尼西亚' },
   };
+  const arrayPayload = [
+    { id: 52, eng: 'Thailand', chn: '泰国' },
+    { id: 6, eng: 'Indonesia', chn: '印度尼西亚' },
+  ];
   const ids = (payload) => api.parseHeroSmsCountryPayload(payload)
     .map((entry) => entry.id)
     .sort((left, right) => left - right);
@@ -188,7 +192,7 @@ return { parseHeroSmsCountryPayload };
     [6, 52]
   );
   assert.deepStrictEqual(
-    ids({ value: Object.values(keyedPayload) }),
+    ids({ value: arrayPayload }),
     [6, 52]
   );
 });

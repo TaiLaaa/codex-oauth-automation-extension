@@ -13064,24 +13064,54 @@ async function runAutoSequenceFromNodeGraph(startNodeId, context = {}) {
           && phoneVerificationHelpers.isPhoneResendBannedNumberError(err);
         if (isSignupPhonePasswordMismatchFailure(err) || isPhoneResendBanned) {
           await restartSignupPhonePasswordMismatchAttemptFromNode('fetch-signup-code', step4RestartCount, err);
-        } else {
-          const preservedState = await getState();
-          const preservedEmail = String(preservedState.email || '').trim();
-          const preservedPassword = String(preservedState.password || '').trim();
-          const emailSuffix = preservedEmail ? `当前邮箱：${preservedEmail}；` : '';
+          setRestartNode('open-chatgpt');
+          restartFromStep1WithCurrentEmail = true;
+          break;
+        }
+
+        const preservedState = await getState();
+        const preservedActivation = preservedState.signupPhoneActivation || null;
+        const preservedPhoneNumber = String(
+          preservedState.signupPhoneNumber
+          || preservedActivation?.phoneNumber
+          || (String(preservedState.accountIdentifierType || '').trim().toLowerCase() === 'phone' ? preservedState.accountIdentifier : '')
+          || ''
+        ).trim();
+        const preservedPassword = String(preservedState.password || '').trim();
+        if (preservedActivation || preservedPhoneNumber) {
           await addLog(
-            `节点 fetch-signup-code：执行失败，准备沿用当前邮箱回到节点 open-chatgpt 重新开始（第 ${step4RestartCount} 次重开）。${emailSuffix}原因：${getErrorMessage(err)}`,
+            `节点 fetch-signup-code：执行失败，已保留当前手机号${preservedPhoneNumber ? ` ${preservedPhoneNumber}` : ''}，准备回到验证码节点继续重试（第 ${step4RestartCount} 次）。原因：${getErrorMessage(err)}`,
             'warn'
           );
-          await invalidateDownstreamAfterAutoRunNodeRestart('open-chatgpt', {
-            logLabel: `节点 fetch-signup-code 报错后准备回到 open-chatgpt 沿用当前邮箱重试（第 ${step4RestartCount} 次重开）`,
-          });
-          const restorePayload = {};
-          if (preservedEmail) restorePayload.email = preservedEmail;
+          const restorePayload = {
+            accountIdentifierType: 'phone',
+            accountIdentifier: preservedPhoneNumber || String(preservedState.accountIdentifier || '').trim(),
+            signupPhoneNumber: preservedPhoneNumber,
+            signupPhoneVerificationPurpose: 'signup',
+          };
+          if (preservedActivation) restorePayload.signupPhoneActivation = preservedActivation;
           if (preservedPassword) restorePayload.password = preservedPassword;
-          if (Object.keys(restorePayload).length) {
-            await setState(restorePayload);
-          }
+          await setState(restorePayload);
+          await setNodeStatus('fetch-signup-code', 'pending');
+          setRestartNode('fetch-signup-code');
+          nodeIndex = Math.max(0, getNodeIndex(await getState(), 'fetch-signup-code'));
+          continue;
+        }
+
+        const preservedEmail = String(preservedState.email || '').trim();
+        const emailSuffix = preservedEmail ? `当前邮箱：${preservedEmail}；` : '';
+        await addLog(
+          `节点 fetch-signup-code：执行失败，准备沿用当前邮箱回到节点 open-chatgpt 重新开始（第 ${step4RestartCount} 次重开）。${emailSuffix}原因：${getErrorMessage(err)}`,
+          'warn'
+        );
+        await invalidateDownstreamAfterAutoRunNodeRestart('open-chatgpt', {
+          logLabel: `节点 fetch-signup-code 报错后准备回到 open-chatgpt 沿用当前邮箱重试（第 ${step4RestartCount} 次重开）`,
+        });
+        const restorePayload = {};
+        if (preservedEmail) restorePayload.email = preservedEmail;
+        if (preservedPassword) restorePayload.password = preservedPassword;
+        if (Object.keys(restorePayload).length) {
+          await setState(restorePayload);
         }
         setRestartNode('open-chatgpt');
         restartFromStep1WithCurrentEmail = true;
@@ -13915,14 +13945,55 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
       typeof fetch === 'function' ? fetch.bind(globalThis) : null
     );
   },
-  finalizeStep3Completion: async () => {
+  finalizeStep3Completion: async (payload = {}) => {
     const currentState = await getState();
     const signupTabId = await getTabId('signup-page');
-    return signupFlowHelpers.finalizeSignupPasswordSubmitInTab(
+    const result = await signupFlowHelpers.finalizeSignupPasswordSubmitInTab(
       signupTabId,
       currentState.password || currentState.customPassword || '',
       3
     );
+    const mergedPayload = {
+      ...(payload || {}),
+      ...(result && typeof result === 'object' ? result : {}),
+    };
+    const identifierType = String(mergedPayload.accountIdentifierType || currentState.accountIdentifierType || '').trim().toLowerCase();
+    const signupPhoneNumber = String(
+      mergedPayload.signupPhoneNumber
+      || mergedPayload.phoneNumber
+      || (identifierType === 'phone' ? mergedPayload.accountIdentifier : '')
+      || currentState.signupPhoneNumber
+      || (String(currentState.accountIdentifierType || '').trim().toLowerCase() === 'phone' ? currentState.accountIdentifier : '')
+      || currentState.signupPhoneActivation?.phoneNumber
+      || ''
+    ).trim();
+    const activeSignupPhoneActivation = mergedPayload.signupPhoneActivation
+      || currentState.signupPhoneActivation
+      || null;
+
+    if (identifierType === 'phone' || signupPhoneNumber || activeSignupPhoneActivation) {
+      const updates = {
+        accountIdentifierType: 'phone',
+        accountIdentifier: signupPhoneNumber || String(currentState.accountIdentifier || '').trim(),
+        signupPhoneNumber,
+        signupPhoneActivation: activeSignupPhoneActivation,
+        signupPhoneVerificationPurpose: mergedPayload.signupVerificationRequestedAt ? 'signup' : (currentState.signupPhoneVerificationPurpose || ''),
+        ...(mergedPayload.signupVerificationRequestedAt ? {
+          signupPhoneVerificationRequestedAt: mergedPayload.signupVerificationRequestedAt,
+        } : {}),
+      };
+      await setState(updates);
+      broadcastDataUpdate(updates);
+      return {
+        ...mergedPayload,
+        accountIdentifierType: 'phone',
+        accountIdentifier: updates.accountIdentifier,
+        signupPhoneNumber,
+        signupPhoneActivation: activeSignupPhoneActivation,
+      };
+    }
+
+    return mergedPayload;
   },
   finalizeIcloudAliasAfterSuccessfulFlow,
   findHotmailAccount,

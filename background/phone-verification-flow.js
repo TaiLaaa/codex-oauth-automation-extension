@@ -6117,14 +6117,26 @@
 
           throw new Error('步骤 4：手机验证码未能成功提交。');
         } catch (error) {
+          if (isPhoneCodeTimeoutError(error) || isPhoneResendServerError(error)) {
+            shouldCancelActivation = false;
+          }
           if (shouldCancelActivation && activation) {
             await cancelSignupPhoneActivation(state, activation).catch(() => {});
+          } else if (activation) {
+            await setPhoneRuntimeState({
+              signupPhoneActivation: activation,
+              signupPhoneNumber: activation.phoneNumber,
+              accountIdentifierType: 'phone',
+              accountIdentifier: activation.phoneNumber,
+              signupPhoneVerificationRequestedAt: Date.now(),
+              signupPhoneVerificationPurpose: 'signup',
+              [PHONE_VERIFICATION_CODE_STATE_KEY]: '',
+            });
+            await addLog('步骤 4：验证码等待/页面临时异常，已保留当前手机号与接码订单，重试将继续使用该号码。', 'warn', {
+              step: 4,
+              stepKey: 'fetch-signup-code',
+            });
           }
-          await setPhoneRuntimeState({
-            [PHONE_VERIFICATION_CODE_STATE_KEY]: '',
-            signupPhoneVerificationRequestedAt: null,
-            signupPhoneVerificationPurpose: '',
-          });
           throw sanitizePhoneCodeTimeoutError(error);
         }
       });

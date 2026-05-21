@@ -979,24 +979,41 @@
           }
           try {
             if (nodeId === 'fill-password' && typeof finalizeStep3Completion === 'function') {
-              await finalizeStep3Completion(message.payload || {});
+              const finalizeResult = await finalizeStep3Completion(message.payload || {});
+              if (finalizeResult && typeof finalizeResult === 'object') {
+                message.payload = {
+                  ...(message.payload || {}),
+                  ...finalizeResult,
+                };
+              }
             }
           } catch (error) {
-            if (typeof isCloudflareSecurityBlockedError === 'function' && isCloudflareSecurityBlockedError(error)) {
+            const errorMessage = error?.message || String(error || '步骤 3 提交后确认失败');
+            const canContinueAfterStep3PhoneChallenge = nodeId === 'fill-password'
+              && String(message.payload?.accountIdentifierType || '').trim().toLowerCase() === 'phone'
+              && message.payload?.signupVerificationRequestedAt
+              && /页面通信超时|内容脚本.*未响应|Receiving end does not exist|message channel is closed|port closed|back\/forward cache|failed to fetch|network/i.test(errorMessage);
+            if (canContinueAfterStep3PhoneChallenge) {
+              await addLog(`步骤 3：密码提交后已检测到手机号验证码页，但提交后确认通信异常，继续切到步骤 4。${errorMessage}`, 'warn', {
+                nodeId,
+                step: 4,
+                stepKey: 'fetch-signup-code',
+              });
+            } else if (typeof isCloudflareSecurityBlockedError === 'function' && isCloudflareSecurityBlockedError(error)) {
               const userMessage = typeof handleCloudflareSecurityBlocked === 'function'
                 ? await handleCloudflareSecurityBlocked(error)
                 : (error?.message || String(error || ''));
               notifyNodeError(nodeId, '流程已被用户停止。');
               return { ok: true, error: userMessage };
+            } else {
+              await setNodeStatus(nodeId, 'failed');
+              await addLog(`失败：${errorMessage}`, 'error', {
+                nodeId,
+              });
+              await appendManualAccountRunRecordIfNeeded(`node:${nodeId}:failed`, null, errorMessage);
+              notifyNodeError(nodeId, errorMessage);
+              return { ok: true, error: errorMessage };
             }
-            const errorMessage = error?.message || String(error || '步骤 3 提交后确认失败');
-            await setNodeStatus(nodeId, 'failed');
-            await addLog(`失败：${errorMessage}`, 'error', {
-              nodeId,
-            });
-            await appendManualAccountRunRecordIfNeeded(`node:${nodeId}:failed`, null, errorMessage);
-            notifyNodeError(nodeId, errorMessage);
-            return { ok: true, error: errorMessage };
           }
 
           const completionStateCandidate = await getState();
@@ -1007,6 +1024,23 @@
           await setNodeStatus(nodeId, 'completed');
           await addLog('已完成', 'ok', { nodeId });
           await handleStepData(resolvedStep, message.payload);
+          if (nodeId === 'fill-password') {
+            const latestStateAfterStep3 = await getState();
+            if (String(message.payload?.accountIdentifierType || '').trim().toLowerCase() === 'phone'
+              && message.payload?.signupVerificationRequestedAt) {
+              const fetchSignupCodeStatus = String(latestStateAfterStep3.nodeStatuses?.['fetch-signup-code'] || 'pending').trim();
+              const activeSignupPhoneActivation = message.payload?.signupPhoneActivation
+                || latestStateAfterStep3.signupPhoneActivation
+                || null;
+              if (activeSignupPhoneActivation && fetchSignupCodeStatus !== 'running' && fetchSignupCodeStatus !== 'completed' && fetchSignupCodeStatus !== 'manual_completed') {
+                await setNodeStatus('fetch-signup-code', 'running');
+                await addLog('步骤 3：已进入手机号验证码页，自动切换到步骤 4 等待短信验证码。', 'info', {
+                  step: 4,
+                  stepKey: 'fetch-signup-code',
+                });
+              }
+            }
+          }
           if (isFinalNode && typeof appendAccountRunRecord === 'function') {
             await appendAccountRunRecord('success', completionState);
           }

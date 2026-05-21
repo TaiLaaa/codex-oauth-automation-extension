@@ -152,6 +152,54 @@
       };
     }
 
+    function resolveBoundEmailVerificationTarget(state = {}, pageState = {}) {
+      return normalizeStep8VerificationTargetEmail(
+        pageState?.displayedEmail
+        || state?.step8VerificationTargetEmail
+        || state?.email
+        || state?.registrationEmailState?.current
+        || state?.registrationEmailState?.previous
+        || ''
+      );
+    }
+
+    async function preparePhoneLoginEmailVerificationState(state = {}, pageState = {}, visibleStep = 0) {
+      const targetEmail = resolveBoundEmailVerificationTarget(state, pageState);
+      if (!targetEmail) {
+        throw new Error(`步骤 ${visibleStep || 8}：手机号登录后进入了邮箱验证码页，但页面没有识别到已绑定邮箱地址，无法自动获取邮箱验证码。请确认页面显示的邮箱是否完整，或手动填写/配置该绑定邮箱后重试。`);
+      }
+
+      const latestState = typeof getState === 'function' ? await getState() : state;
+      if (typeof persistRegistrationEmailState === 'function') {
+        await persistRegistrationEmailState(latestState, targetEmail, {
+          source: 'phone_login_email_verification',
+          preserveAccountIdentity: true,
+          preservePrevious: true,
+        });
+      } else if (typeof setState === 'function') {
+        await setState({
+          email: targetEmail,
+          step8VerificationTargetEmail: targetEmail,
+        });
+      }
+
+      await setState({
+        step8VerificationTargetEmail: targetEmail,
+      });
+      await addLog(
+        `步骤 ${visibleStep || 8}：手机号登录后检测到已绑定邮箱验证码页，改为从绑定邮箱 ${targetEmail} 获取登录验证码。`,
+        'warn'
+      );
+
+      const persistedState = typeof getState === 'function' ? await getState() : latestState;
+      return {
+        ...state,
+        ...persistedState,
+        email: targetEmail,
+        step8VerificationTargetEmail: targetEmail,
+      };
+    }
+
     async function getLoginAuthStateFromContent(visibleStep, options = {}) {
       if (typeof sendToContentScriptResilient !== 'function') {
         return {};
@@ -798,7 +846,8 @@
           return;
         }
         if (pageState?.state === 'verification_page') {
-          throw new Error(`步骤 ${visibleStep}：手机号注册模式只允许处理手机登录验证码，当前进入了普通邮箱登录验证码页，不会回落到邮箱 provider。URL: ${pageState?.url || ''}`.trim());
+          const preparedEmailState = await preparePhoneLoginEmailVerificationState(state, pageState, visibleStep);
+          return pollEmailVerificationCode(preparedEmailState, pageState, visibleStep, runtime);
         }
         if (pageState?.state === 'add_phone_page') {
           throw new Error(`步骤 ${visibleStep}：手机号注册模式不应进入添加手机号页。URL: ${pageState?.url || ''}`.trim());

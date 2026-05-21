@@ -197,7 +197,9 @@
       const tokenExchangeFailure = /auth\.openai\.com\/oauth\/token/i.test(message);
       const transientNetworkSignal = /unexpected\s+eof|eof|connection\s+refused|i\/o\s+timeout|context\s+deadline\s+exceeded|connection\s+reset|broken\s+pipe|failed\s+to\s+fetch|temporarily\s+unavailable|timeout/i.test(message);
       const transientExchangeUserSignal = /token_exchange_user_error|invalid\s+request\.\s+please\s+try\s+again\s+later/i.test(message);
-      if (transientExchangeUserSignal) {
+      const transientSub2ApiHttpSignal = /SUB2API[\s\S]*(?:HTTP\s*(?:502|503|504)|请求超时|failed\s+to\s+fetch|network|网络|临时|暂时|gateway|bad\s+gateway|service\s+unavailable)/i.test(message)
+        || /(?:HTTP\s*(?:502|503|504)|bad\s+gateway|service\s+unavailable|gateway\s+timeout)[\s\S]*SUB2API/i.test(message);
+      if (transientExchangeUserSignal || transientSub2ApiHttpSignal) {
         return true;
       }
       return tokenExchangeFailure && transientNetworkSignal;
@@ -388,7 +390,7 @@
         throw new Error('SUB2API URL is not configured. Please fill it in the side panel first.');
       }
       const api = getSub2ApiApi();
-      const maxExchangeAttempts = 3;
+      const maxExchangeAttempts = 5;
       let lastError = null;
       for (let attempt = 1; attempt <= maxExchangeAttempts; attempt += 1) {
         try {

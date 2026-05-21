@@ -15539,7 +15539,11 @@ async function recoverOAuthLocalhostTimeout(details = {}) {
   const reloginBoundEmailStep = typeof getStepIdByKeyForState === 'function'
     ? Number(getStepIdByKeyForState('relogin-bound-email', state || {}))
     : 0;
-  const authLoginStep = Number.isFinite(reloginBoundEmailStep)
+  const shouldRecoverFromBoundEmailRelogin = Boolean(state?.bindEmailSubmitted)
+    || Boolean(state?.boundEmailReloginActive)
+    || String(state?.lastCompletedAuthNode || '').trim() === 'fetch-bind-email-code';
+  const authLoginStep = shouldRecoverFromBoundEmailRelogin
+    && Number.isFinite(reloginBoundEmailStep)
     && reloginBoundEmailStep > 0
     && reloginBoundEmailStep < Number(visibleStep)
     ? reloginBoundEmailStep
